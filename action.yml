@@ -1,0 +1,254 @@
+name: 'iac-cicd'
+description: 'Zero-config OpenTofu/Terraform plan-on-PR, apply-on-merge, with state in Cloudflare R2.'
+author: 'ZeroConfig.io'
+
+branding:
+  icon: 'cloud-lightning'
+  color: 'orange'
+
+inputs:
+  tool:
+    description: "IaC tool to run: 'opentofu' or 'terraform'."
+    required: false
+    default: 'opentofu'
+  tool-version:
+    description: "Version of the tool to install, e.g. '1.10.0'. 'latest' resolves to the newest release."
+    required: false
+    default: 'latest'
+  working-directory:
+    description: 'Directory containing the root module.'
+    required: false
+    default: '.'
+  command:
+    description: "Override auto-detection ('plan' or 'apply'). Default: plan on pull_request events, apply otherwise."
+    required: false
+    default: ''
+  r2-account-id:
+    description: 'Cloudflare account ID that owns the R2 bucket.'
+    required: true
+  r2-access-key-id:
+    description: 'R2 S3-compatible API token: access key ID.'
+    required: true
+  r2-secret-access-key:
+    description: 'R2 S3-compatible API token: secret access key.'
+    required: true
+  r2-bucket:
+    description: 'R2 bucket used for state storage.'
+    required: true
+  state-key:
+    description: "Object key for the state file. Default: '<owner>/<repo>[/<working-directory>]/terraform.tfstate'."
+    required: false
+    default: ''
+  extra-args:
+    description: 'Extra CLI flags appended to the plan/apply command.'
+    required: false
+    default: ''
+  comment-on-pr:
+    description: 'Post/update a sticky PR comment with the plan output.'
+    required: false
+    default: 'true'
+  github-token:
+    description: 'Token used to post the PR comment. Defaults to the workflow job token.'
+    required: false
+    default: ''
+
+outputs:
+  exitcode:
+    description: 'Exit code of the plan/apply command (0 = no changes, 2 = plan has changes).'
+    value: ${{ steps.run.outputs.exitcode }}
+  has-changes:
+    description: "'true' if the plan detected changes."
+    value: ${{ steps.run.outputs.has-changes }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate inputs
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "${{ inputs.tool }}" in
+          opentofu|terraform) ;;
+          *)
+            echo "::error::tool must be 'opentofu' or 'terraform', got '${{ inputs.tool }}'"
+            exit 1
+            ;;
+        esac
+
+    - name: Set up OpenTofu
+      if: inputs.tool == 'opentofu'
+      uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+      with:
+        tofu_version: ${{ inputs.tool-version }}
+        tofu_wrapper: false
+
+    - name: Set up Terraform
+      if: inputs.tool == 'terraform'
+      uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+      with:
+        terraform_version: ${{ inputs.tool-version }}
+        terraform_wrapper: false
+
+    - name: Resolve command and state key
+      id: resolve
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        cmd="${{ inputs.command }}"
+        if [ -z "$cmd" ]; then
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            cmd="plan"
+          else
+            cmd="apply"
+          fi
+        fi
+        if [ "$cmd" != "plan" ] && [ "$cmd" != "apply" ]; then
+          echo "::error::command must be 'plan' or 'apply', got '$cmd'"
+          exit 1
+        fi
+
+        key="${{ inputs.state-key }}"
+        if [ -z "$key" ]; then
+          key="${{ github.repository }}"
+          wd="${{ inputs.working-directory }}"
+          if [ -n "$wd" ] && [ "$wd" != "." ]; then
+            key="$key/$wd"
+          fi
+          key="$key/terraform.tfstate"
+        fi
+
+        bin="terraform"
+        if [ "${{ inputs.tool }}" = "opentofu" ]; then
+          bin="tofu"
+        fi
+
+        echo "command=$cmd" >> "$GITHUB_OUTPUT"
+        echo "state-key=$key" >> "$GITHUB_OUTPUT"
+        echo "bin=$bin" >> "$GITHUB_OUTPUT"
+
+    - name: Write backend config
+      shell: bash
+      run: |
+        set -euo pipefail
+        cat > "$RUNNER_TEMP/iac-cicd-backend.hcl" <<EOF
+        bucket                      = "${{ inputs.r2-bucket }}"
+        key                         = "${{ steps.resolve.outputs.state-key }}"
+        region                      = "auto"
+        endpoints                   = { s3 = "https://${{ inputs.r2-account-id }}.r2.cloudflarestorage.com" }
+        use_lockfile                = true
+        use_path_style              = true
+        skip_credentials_validation = true
+        skip_region_validation      = true
+        skip_requesting_account_id  = true
+        skip_s3_checksum            = true
+        skip_metadata_api_check     = true
+        encrypt                     = false
+        EOF
+
+    - name: Init
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.r2-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.r2-secret-access-key }}
+      run: |
+        set -euo pipefail
+        "${{ steps.resolve.outputs.bin }}" init -input=false \
+          -backend-config="$RUNNER_TEMP/iac-cicd-backend.hcl"
+
+    - name: Plan
+      if: steps.resolve.outputs.command == 'plan'
+      id: plan
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.r2-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.r2-secret-access-key }}
+      run: |
+        set -euo pipefail
+        set +e
+        "${{ steps.resolve.outputs.bin }}" plan -input=false -no-color -detailed-exitcode \
+          ${{ inputs.extra-args }} | tee "$RUNNER_TEMP/iac-cicd-plan.txt"
+        code="${PIPESTATUS[0]}"
+        set -e
+
+        echo "exitcode=$code" >> "$GITHUB_OUTPUT"
+        if [ "$code" = "1" ]; then
+          echo "::error::plan failed, see log above"
+          exit 1
+        fi
+        if [ "$code" = "2" ]; then
+          echo "has-changes=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "has-changes=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Comment plan on PR
+      if: |
+        steps.resolve.outputs.command == 'plan' &&
+        inputs.comment-on-pr == 'true' &&
+        github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token || github.token }}
+      run: |
+        set -euo pipefail
+
+        marker="<!-- iac-cicd-plan:${{ inputs.working-directory }} -->"
+        body_file="$RUNNER_TEMP/iac-cicd-comment.md"
+        plan_file="$RUNNER_TEMP/iac-cicd-plan.txt"
+        plan_size=$(wc -c < "$plan_file")
+        cap=55000
+
+        {
+          echo "$marker"
+          echo "### IaC plan (\`${{ inputs.tool }}\`, \`${{ inputs.working-directory }}\`)"
+          echo '```diff'
+          head -c "$cap" "$plan_file"
+          echo '```'
+          if [ "$plan_size" -gt "$cap" ]; then
+            echo ""
+            echo "_Plan output truncated ($plan_size bytes). Full log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}_"
+          fi
+        } > "$body_file"
+
+        repo="${{ github.repository }}"
+        pr="${{ github.event.pull_request.number }}"
+
+        existing=$(gh api "repos/$repo/issues/$pr/comments" --paginate \
+          | jq -r --arg marker "$marker" '.[] | select(.body | startswith($marker)) | .id' \
+          | head -n1)
+
+        if [ -n "$existing" ]; then
+          gh api -X PATCH "repos/$repo/issues/comments/$existing" -F body=@"$body_file"
+        else
+          gh api -X POST "repos/$repo/issues/$pr/comments" -F body=@"$body_file"
+        fi
+
+    - name: Apply
+      if: steps.resolve.outputs.command == 'apply'
+      id: apply
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.r2-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.r2-secret-access-key }}
+      run: |
+        set -euo pipefail
+        "${{ steps.resolve.outputs.bin }}" apply -input=false -auto-approve ${{ inputs.extra-args }}
+        echo "exitcode=0" >> "$GITHUB_OUTPUT"
+        echo "has-changes=true" >> "$GITHUB_OUTPUT"
+
+    - name: Set outputs
+      id: run
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ "${{ steps.resolve.outputs.command }}" = "plan" ]; then
+          echo "exitcode=${{ steps.plan.outputs.exitcode }}" >> "$GITHUB_OUTPUT"
+          echo "has-changes=${{ steps.plan.outputs.has-changes }}" >> "$GITHUB_OUTPUT"
+        else
+          echo "exitcode=${{ steps.apply.outputs.exitcode }}" >> "$GITHUB_OUTPUT"
+          echo "has-changes=${{ steps.apply.outputs.has-changes }}" >> "$GITHUB_OUTPUT"
+        fi

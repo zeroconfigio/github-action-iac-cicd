@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+#
+# Lints this repo's own action.yml and example workflows. actionlint shells
+# out to shellcheck for embedded `run:` steps when shellcheck is on PATH,
+# ubuntu-latest ships it preinstalled, so no separate shellcheck step needed.
+
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: reviewdog/action-actionlint@95df9f9287044811e4e023d40cb292e07569ac85 # v1.73.4
+        with:
+          reporter: github-check
+          fail_level: error
