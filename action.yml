@@ -121,6 +121,10 @@ runs:
         aws_role_arn="${{ inputs.aws-role-arn }}"
 
         if [ "$backend" = "r2" ]; then
+          if [ -n "$aws_role_arn" ]; then
+            echo "::error::aws-role-arn is only meaningful when backend is 's3', r2 has no OIDC equivalent"
+            exit 1
+          fi
           if [ -z "$endpoint" ]; then
             if [ -z "${{ inputs.account-id }}" ]; then
               echo "::error::account-id is required when backend is 'r2', unless endpoint is set explicitly"
@@ -302,7 +306,7 @@ runs:
         IAC_PLAN_JSON: ${{ runner.temp }}/iac-cicd-tfplan.json
       run: |
         set -euo pipefail
-        if ! (unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; ${{ inputs.policy-command }}); then
+        if ! (unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; ${{ inputs.policy-command }}); then
           echo "::error::policy check failed"
           exit 1
         fi
@@ -373,7 +377,7 @@ runs:
 
         if [ -n "${{ inputs.policy-command }}" ]; then
           export IAC_PLAN_JSON="$RUNNER_TEMP/iac-cicd-tfplan.json"
-          if ! (unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; ${{ inputs.policy-command }}); then
+          if ! (unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; ${{ inputs.policy-command }}); then
             echo "::error::policy check failed"
             exit 1
           fi

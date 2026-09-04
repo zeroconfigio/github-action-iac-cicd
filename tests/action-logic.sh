@@ -88,6 +88,7 @@ resolve_backend() {
   local account_id="$2"
   local endpoint="$3"
   local region="$4"
+  local aws_role_arn="${5:-}"
 
   case "$backend" in
     r2|s3) ;;
@@ -98,6 +99,10 @@ resolve_backend() {
   esac
 
   if [ "$backend" = "r2" ]; then
+    if [ -n "$aws_role_arn" ]; then
+      echo "::error::aws-role-arn is only meaningful when backend is 's3', r2 has no OIDC equivalent" >&2
+      return 1
+    fi
     if [ -z "$endpoint" ]; then
       if [ -z "$account_id" ]; then
         echo "::error::account-id is required when backend is 'r2', unless endpoint is set explicitly" >&2
@@ -141,8 +146,9 @@ assert_backend_fails() {
   local account_id="$3"
   local endpoint="$4"
   local region="$5"
+  local aws_role_arn="${6:-}"
 
-  if resolve_backend "$backend" "$account_id" "$endpoint" "$region" > /dev/null 2>&1; then
+  if resolve_backend "$backend" "$account_id" "$endpoint" "$region" "$aws_role_arn" > /dev/null 2>&1; then
     echo "FAIL: $description (expected resolve_backend to fail, it succeeded)"
     failures=$((failures + 1))
   else
@@ -191,6 +197,10 @@ assert_backend_resolves \
 assert_backend_fails \
   "an invalid backend is rejected" \
   "gcs" "" "" "us-east-1"
+
+assert_backend_fails \
+  "aws-role-arn set with backend r2 is rejected, not silently ignored" \
+  "r2" "my-account" "" "" "arn:aws:iam::123456789012:role/deploy"
 
 # Mirrors action.yml's "Plan" step's plan invocation (command construction only,
 # never invokes the real binary).
@@ -505,11 +515,12 @@ else
   failures=$((failures + 1))
 fi
 
-policy_unset_count=$(grep -c 'unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY' "$action_yml")
+# Must include AWS_SESSION_TOKEN too: OIDC auth exports it alongside the access key and secret.
+policy_unset_count=$(grep -c 'unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN' "$action_yml")
 if [ "$policy_unset_count" -eq 2 ]; then
-  echo "PASS: both policy-command invocations isolate AWS credentials from their subshell"
+  echo "PASS: both policy-command invocations isolate all three AWS credential variables"
 else
-  echo "FAIL: expected 2 policy-command credential-isolation subshells, found $policy_unset_count"
+  echo "FAIL: expected 2 policy-command credential-isolation subshells covering all three AWS vars, found $policy_unset_count"
   failures=$((failures + 1))
 fi
 
@@ -632,6 +643,23 @@ assert_auth_mode_fails \
 assert_auth_mode_fails \
   "s3 backend with aws-role-arn and secret-access-key set (access-key-id unset) fails validation" \
   "s3" "" "secretexample" "arn:aws:iam::123456789012:role/deploy"
+
+# A stale env: block here would silently override OIDC-exported credentials with empty strings.
+if grep -n 'AWS_ACCESS_KEY_ID: \${{ inputs.access-key-id }}' "$action_yml" > /dev/null 2>&1 \
+  || grep -n 'AWS_SECRET_ACCESS_KEY: \${{ inputs.secret-access-key }}' "$action_yml" > /dev/null 2>&1; then
+  echo "FAIL: action.yml still has a per-step AWS credential env: block, it should only export via the shared credential step"
+  failures=$((failures + 1))
+else
+  echo "PASS: no per-step AWS credential env: blocks remain on Init/Plan/Apply"
+fi
+
+if grep -n "auth-mode == 'oidc'" "$action_yml" > /dev/null 2>&1 \
+  && grep -A1 "auth-mode == 'oidc'" "$action_yml" | grep -q "aws-actions/configure-aws-credentials"; then
+  echo "PASS: the OIDC auth-mode step selects aws-actions/configure-aws-credentials"
+else
+  echo "FAIL: no step selects aws-actions/configure-aws-credentials under the OIDC auth-mode condition"
+  failures=$((failures + 1))
+fi
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures scenario(s) failed"
