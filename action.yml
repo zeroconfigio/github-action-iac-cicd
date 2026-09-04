@@ -32,10 +32,20 @@ inputs:
     required: true
   access-key-id:
     description: 'S3-compatible API access key ID.'
-    required: true
+    required: false
+    default: ''
   secret-access-key:
     description: 'S3-compatible API secret access key.'
-    required: true
+    required: false
+    default: ''
+  aws-role-arn:
+    description: "IAM role ARN to assume via OIDC. Only meaningful when backend is 's3'. Presence selects OIDC auth over static access-key-id/secret-access-key."
+    required: false
+    default: ''
+  aws-role-session-name:
+    description: 'Session name used when assuming aws-role-arn via OIDC.'
+    required: false
+    default: 'iac-cicd'
   account-id:
     description: "Cloudflare account ID that owns the bucket. Required when backend is 'r2', unless endpoint is set explicitly."
     required: false
@@ -106,6 +116,10 @@ runs:
         endpoint="${{ inputs.endpoint }}"
         region="${{ inputs.region }}"
 
+        access_key_id="${{ inputs.access-key-id }}"
+        secret_access_key="${{ inputs.secret-access-key }}"
+        aws_role_arn="${{ inputs.aws-role-arn }}"
+
         if [ "$backend" = "r2" ]; then
           if [ -z "$endpoint" ]; then
             if [ -z "${{ inputs.account-id }}" ]; then
@@ -118,6 +132,11 @@ runs:
           use_path_style=true
           skip_checks=true
           encrypt=false
+          if [ -z "$access_key_id" ] || [ -z "$secret_access_key" ]; then
+            echo "::error::access-key-id and secret-access-key are both required when backend is 'r2'"
+            exit 1
+          fi
+          auth_mode=static
         else
           if [ -z "$region" ]; then
             echo "::error::region is required when backend is 's3'"
@@ -126,6 +145,20 @@ runs:
           use_path_style=false
           skip_checks=false
           encrypt=true
+
+          if [ -n "$aws_role_arn" ]; then
+            if [ -n "$access_key_id" ] || [ -n "$secret_access_key" ]; then
+              echo "::error::set either aws-role-arn or access-key-id/secret-access-key for backend 's3', not both"
+              exit 1
+            fi
+            auth_mode=oidc
+          else
+            if [ -z "$access_key_id" ] || [ -z "$secret_access_key" ]; then
+              echo "::error::access-key-id and secret-access-key are both required for backend 's3' unless aws-role-arn is set for OIDC"
+              exit 1
+            fi
+            auth_mode=static
+          fi
         fi
 
         echo "endpoint=$endpoint" >> "$GITHUB_OUTPUT"
@@ -133,6 +166,7 @@ runs:
         echo "use-path-style=$use_path_style" >> "$GITHUB_OUTPUT"
         echo "skip-checks=$skip_checks" >> "$GITHUB_OUTPUT"
         echo "encrypt=$encrypt" >> "$GITHUB_OUTPUT"
+        echo "auth-mode=$auth_mode" >> "$GITHUB_OUTPUT"
 
     - name: Set up OpenTofu
       if: inputs.tool == 'opentofu'
@@ -207,12 +241,25 @@ runs:
           echo "encrypt                     = ${{ steps.validate.outputs.encrypt }}"
         } > "$RUNNER_TEMP/iac-cicd-backend.hcl"
 
+    - name: Configure credentials (OIDC)
+      if: steps.validate.outputs.auth-mode == 'oidc'
+      uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+      with:
+        role-to-assume: ${{ inputs.aws-role-arn }}
+        role-session-name: ${{ inputs.aws-role-session-name }}
+        aws-region: ${{ steps.validate.outputs.region }}
+
+    - name: Configure credentials (static)
+      if: steps.validate.outputs.auth-mode == 'static'
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "AWS_ACCESS_KEY_ID=${{ inputs.access-key-id }}" >> "$GITHUB_ENV"
+        echo "AWS_SECRET_ACCESS_KEY=${{ inputs.secret-access-key }}" >> "$GITHUB_ENV"
+
     - name: Init
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      env:
-        AWS_ACCESS_KEY_ID: ${{ inputs.access-key-id }}
-        AWS_SECRET_ACCESS_KEY: ${{ inputs.secret-access-key }}
       run: |
         set -euo pipefail
         "${{ steps.resolve.outputs.bin }}" init -input=false \
@@ -223,9 +270,6 @@ runs:
       id: plan
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      env:
-        AWS_ACCESS_KEY_ID: ${{ inputs.access-key-id }}
-        AWS_SECRET_ACCESS_KEY: ${{ inputs.secret-access-key }}
       run: |
         # keep in sync with the Apply step's plan+show sequence below
         set -euo pipefail
@@ -309,9 +353,6 @@ runs:
       id: apply
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      env:
-        AWS_ACCESS_KEY_ID: ${{ inputs.access-key-id }}
-        AWS_SECRET_ACCESS_KEY: ${{ inputs.secret-access-key }}
       run: |
         # keep in sync with the Plan step's plan+show sequence above
         set -euo pipefail

@@ -374,6 +374,143 @@ else
   echo "PASS: action.yml contains no continue-on-error: true step"
 fi
 
+# Mirrors action.yml's "Validate inputs and resolve backend" step's
+# credential/auth-mode branching for access-key-id/secret-access-key/aws-role-arn.
+validate_auth_mode() {
+  local backend="$1"
+  local access_key_id="$2"
+  local secret_access_key="$3"
+  local aws_role_arn="$4"
+
+  if [ "$backend" = "r2" ]; then
+    if [ -z "$access_key_id" ] || [ -z "$secret_access_key" ]; then
+      echo "::error::access-key-id and secret-access-key are both required when backend is 'r2'" >&2
+      return 1
+    fi
+    echo "auth-mode=static"
+    return 0
+  fi
+
+  # backend = s3
+  if [ -n "$aws_role_arn" ]; then
+    if [ -n "$access_key_id" ] || [ -n "$secret_access_key" ]; then
+      echo "::error::set either aws-role-arn or access-key-id/secret-access-key for backend 's3', not both" >&2
+      return 1
+    fi
+    echo "auth-mode=oidc"
+    return 0
+  fi
+
+  if [ -z "$access_key_id" ] || [ -z "$secret_access_key" ]; then
+    echo "::error::access-key-id and secret-access-key are both required for backend 's3' unless aws-role-arn is set for OIDC" >&2
+    return 1
+  fi
+  echo "auth-mode=static"
+  return 0
+}
+
+# Asserts validate_auth_mode succeeds and produces the expected auth-mode.
+assert_auth_mode_succeeds() {
+  local description="$1"
+  local backend="$2"
+  local access_key_id="$3"
+  local secret_access_key="$4"
+  local aws_role_arn="$5"
+  local expected="$6"
+
+  local actual
+  if ! actual="$(validate_auth_mode "$backend" "$access_key_id" "$secret_access_key" "$aws_role_arn" 2>/dev/null)"; then
+    echo "FAIL: $description (expected success, but validation failed)"
+    failures=$((failures + 1))
+    return
+  fi
+
+  if [ "$actual" = "auth-mode=$expected" ]; then
+    echo "PASS: $description"
+  else
+    echo "FAIL: $description (expected 'auth-mode=$expected', got '$actual')"
+    failures=$((failures + 1))
+  fi
+}
+
+# Asserts validate_auth_mode fails.
+assert_auth_mode_fails() {
+  local description="$1"
+  local backend="$2"
+  local access_key_id="$3"
+  local secret_access_key="$4"
+  local aws_role_arn="$5"
+
+  if validate_auth_mode "$backend" "$access_key_id" "$secret_access_key" "$aws_role_arn" > /dev/null 2>&1; then
+    echo "FAIL: $description (expected validation to fail, but it succeeded)"
+    failures=$((failures + 1))
+  else
+    echo "PASS: $description"
+  fi
+}
+
+# Scenario 1: r2 backend with no static keys fails (existing behavior, must not regress).
+assert_auth_mode_fails \
+  "r2 backend with no static keys fails validation" \
+  "r2" "" "" ""
+
+# Scenario 2: s3 backend, aws-role-arn set, no static keys, resolves to auth-mode=oidc.
+assert_auth_mode_succeeds \
+  "s3 backend with aws-role-arn set and no static keys resolves to auth-mode=oidc" \
+  "s3" "" "" "arn:aws:iam::123456789012:role/deploy" "oidc"
+
+# Scenario 3: s3 backend, no aws-role-arn, both static keys set, resolves to auth-mode=static.
+assert_auth_mode_succeeds \
+  "s3 backend with both static keys set and no aws-role-arn resolves to auth-mode=static" \
+  "s3" "AKIAEXAMPLE" "secretexample" "" "static"
+
+# Scenario 4: s3 backend, aws-role-arn set AND both static keys set, fails loud naming the conflict.
+assert_auth_mode_fails \
+  "s3 backend with aws-role-arn and both static keys set fails validation" \
+  "s3" "AKIAEXAMPLE" "secretexample" "arn:aws:iam::123456789012:role/deploy"
+
+# Scenario 5: s3 backend, aws-role-arn unset AND static keys unset, fails.
+assert_auth_mode_fails \
+  "s3 backend with no aws-role-arn and no static keys fails validation" \
+  "s3" "" "" ""
+
+# Scenario 6: s3 backend, access-key-id set but secret-access-key empty, fails.
+assert_auth_mode_fails \
+  "s3 backend with access-key-id set but secret-access-key empty fails validation" \
+  "s3" "AKIAEXAMPLE" "" ""
+
+# Scenario 7: s3 backend, secret-access-key set but access-key-id empty, fails.
+assert_auth_mode_fails \
+  "s3 backend with secret-access-key set but access-key-id empty fails validation" \
+  "s3" "" "secretexample" ""
+
+# Scenario 8: s3 backend, aws-role-arn set, access-key-id set, secret-access-key unset, fails loud naming the conflict.
+assert_auth_mode_fails \
+  "s3 backend with aws-role-arn and access-key-id set (secret-access-key unset) fails validation" \
+  "s3" "AKIAEXAMPLE" "" "arn:aws:iam::123456789012:role/deploy"
+
+# Scenario 9: s3 backend, aws-role-arn set, secret-access-key set, access-key-id unset, fails loud naming the conflict.
+assert_auth_mode_fails \
+  "s3 backend with aws-role-arn and secret-access-key set (access-key-id unset) fails validation" \
+  "s3" "" "secretexample" "arn:aws:iam::123456789012:role/deploy"
+
+# A stale env: block here would silently override OIDC-exported credentials with empty strings.
+if grep -n 'AWS_ACCESS_KEY_ID: \${{ inputs.access-key-id }}' "$action_yml" > /dev/null 2>&1 \
+  || grep -n 'AWS_SECRET_ACCESS_KEY: \${{ inputs.secret-access-key }}' "$action_yml" > /dev/null 2>&1; then
+  echo "FAIL: action.yml still has a per-step AWS credential env: block, it should only export via the shared credential step"
+  failures=$((failures + 1))
+else
+  echo "PASS: no per-step AWS credential env: blocks remain on Init/Plan/Apply"
+fi
+
+if grep -n "auth-mode == 'oidc'" "$action_yml" > /dev/null 2>&1 \
+  && grep -A1 "auth-mode == 'oidc'" "$action_yml" | grep -q "aws-actions/configure-aws-credentials"; then
+  echo "PASS: the OIDC auth-mode step selects aws-actions/configure-aws-credentials"
+else
+  echo "FAIL: no step selects aws-actions/configure-aws-credentials under the OIDC auth-mode condition"
+  failures=$((failures + 1))
+fi
+
 if [ "$failures" -gt 0 ]; then
   echo "$failures scenario(s) failed"
   exit 1
