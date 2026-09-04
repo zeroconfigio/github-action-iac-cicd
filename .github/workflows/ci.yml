@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: MIT
 #
-# Lints this repo's own action.yml and example workflows. actionlint shells
-# out to shellcheck for embedded `run:` steps when shellcheck is on PATH,
-# ubuntu-latest ships it preinstalled, so no separate shellcheck step needed.
+# Three checks on every PR and push to main:
+#   - actionlint: lints the workflow/example files themselves (it shells
+#     out to shellcheck for their own `run:` steps automatically).
+#   - self-lint: actionlint does not shellcheck a composite action's own
+#     `run:` blocks yet, even when referenced locally via `uses: ./`, so
+#     this job extracts action.yml's bash directly and shellchecks it.
+#   - test: runs this repo's own test harnesses (tests/*.sh).
 
 name: ci
 
@@ -29,3 +33,96 @@ jobs:
         with:
           reporter: github-check
           fail_level: error
+
+  self-lint:
+    # actionlint does not (yet) shellcheck the run: blocks of a local
+    # composite action's action.yml, even when it's referenced via
+    # uses: ./ elsewhere in the workflow (confirmed empirically: an
+    # injected unquoted-variable violation in action.yml went unreported
+    # by actionlint). This job extracts every bash run: block from
+    # action.yml directly and shellchecks each one on its own, which does
+    # catch such violations. GitHub Actions expressions (the ${{ }}
+    # placeholders) are stubbed out with a synthetic shell variable
+    # reference first, so shellcheck treats them as real runtime values
+    # rather than flagging them as hardcoded string literals.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Ensure shellcheck is available
+        run: |
+          set -euo pipefail
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y shellcheck
+          fi
+
+      - name: Install PyYAML
+        run: python3 -m pip install --quiet pyyaml
+
+      - name: "Shellcheck action.yml's composite run: blocks"
+        run: |
+          python3 - <<'PY'
+          import re
+          import subprocess
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          import yaml
+
+          dollar = chr(36)
+          expr_re = re.compile(re.escape(dollar) + r"\{\{[^}]*\}\}")
+
+          with open("action.yml") as f:
+              action = yaml.safe_load(f)
+
+          steps = action.get("runs", {}).get("steps", [])
+          failed = []
+          checked = 0
+
+          for step in steps:
+              if step.get("shell") != "bash":
+                  continue
+              script = step.get("run")
+              if not script:
+                  continue
+              checked += 1
+              name = step.get("name") or step.get("id") or "unnamed step"
+              sanitized = expr_re.sub(dollar + "SC_STUB_VALUE", script)
+
+              with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as handle:
+                  handle.write("#!/usr/bin/env bash\n")
+                  handle.write(sanitized)
+                  tmp_path = handle.name
+
+              result = subprocess.run(
+                  ["shellcheck", "--severity=warning", tmp_path],
+                  capture_output=True,
+                  text=True,
+              )
+              Path(tmp_path).unlink()
+
+              if result.returncode != 0:
+                  failed.append(name)
+                  print("::error::shellcheck found issues in action.yml step '" + name + "'")
+                  print(result.stdout)
+                  print(result.stderr)
+
+          if failed:
+              print(str(len(failed)) + " step(s) failed shellcheck: " + ", ".join(failed))
+              sys.exit(1)
+
+          print(str(checked) + " action.yml step(s) checked, all clean")
+          PY
+
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - run: bash tests/action-logic.sh

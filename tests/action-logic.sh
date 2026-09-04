@@ -4,7 +4,8 @@ set -uo pipefail
 
 failures=0
 
-# Mirrors action.yml's "Resolve command and state key" step.
+# Mirrors action.yml's "Resolve command and state key" step, including its
+# invalid-override validation, not just the default-resolution branch.
 resolve_command() {
   local event_name="$1"
   local cmd="$2"
@@ -15,6 +16,11 @@ resolve_command() {
     else
       cmd="plan"
     fi
+  fi
+
+  if [ "$cmd" != "plan" ] && [ "$cmd" != "apply" ]; then
+    echo "::error::command must be 'plan' or 'apply', got '$cmd'" >&2
+    return 1
   fi
 
   echo "$cmd"
@@ -57,6 +63,24 @@ assert_resolve_command \
 assert_resolve_command \
   "push with plan override resolves to plan" \
   "push" "plan" "plan"
+
+# assert_resolve_command only checks the success path; this checks failure.
+assert_resolve_command_fails() {
+  local description="$1"
+  local event_name="$2"
+  local command_override="$3"
+
+  if resolve_command "$event_name" "$command_override" > /dev/null 2>&1; then
+    echo "FAIL: $description (expected resolve_command to fail, it succeeded)"
+    failures=$((failures + 1))
+  else
+    echo "PASS: $description"
+  fi
+}
+
+assert_resolve_command_fails \
+  "an invalid command override is rejected" \
+  "pull_request" "destroy"
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures scenario(s) failed"
