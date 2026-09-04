@@ -120,6 +120,36 @@ is unaffected by this: its `plan` job already gates on
 other event type. This only matters for consumers that call the action
 directly from other event types (a scheduled drift check, for example).
 
+## Policy gate
+
+`policy-command` is an optional hook. It's not a bundled policy engine,
+`iac-cicd` doesn't ship or install one. Point it at whatever policy tool
+you already use (OPA/conftest, Sentinel, a custom script) and the action
+runs it for you.
+
+The command receives the run's `terraform show -json`-rendered plan via the
+`IAC_PLAN_JSON` env var, a path to the plan file on disk. A nonzero exit
+fails the check, which fails the job.
+
+It runs twice: once at plan-time, once at apply-time. That's deliberate,
+not redundant. Plan and apply are separate CI runs on separate trigger
+events, a PR's `plan` and the later merge's `apply` are different
+invocations. So this doesn't guarantee the plan a reviewer saw on the PR is
+exactly what gets applied at merge time. What it does guarantee: the hook
+always sees, and can block, exactly what's about to happen, immediately
+before it happens, in both places where "about to happen" occurs. That's
+defense-in-depth against a bypassed branch-protection check, like an admin
+force-merge or a required-check list someone set up wrong, not extra
+safety for its own sake.
+
+```yaml
+policy-command: "conftest test --policy ./policy $IAC_PLAN_JSON"
+```
+
+`conftest`/OPA above is just an example. `iac-cicd` doesn't install or
+require it, or any other policy tool. Your own workflow needs to install
+whatever `policy-command` points at before this action's step runs.
+
 ## Inputs
 
 | Input | Required | Default | Description |
@@ -138,6 +168,7 @@ directly from other event types (a scheduled drift check, for example).
 | `state-key` | no | derived | Object key for the state file |
 | `extra-args` | no | `` | Extra flags appended to the plan that produces the applied plan file (not to the final `apply <planfile>` call, which can't take flags like `-var-file` once a plan is saved) |
 | `comment-on-pr` | no | `true` | Post/update a sticky PR comment on plan |
+| `policy-command` | no | `` | Command checked against the JSON plan at plan-time and apply-time; nonzero exit fails the run, see [Policy gate](#policy-gate) |
 | `github-token` | no | job token | Token used to post the PR comment |
 
 ## Outputs
@@ -171,8 +202,10 @@ does not touch that block.
 
 ## What this deliberately doesn't do
 
-- No policy-as-code, no drift detection, no cost estimation. If you need
-  those, look at a full platform (Scalr, Terrakube).
+- No bundled policy engine, no drift detection, no cost estimation.
+  `policy-command` (see [Policy gate](#policy-gate)) is a hook to your own
+  policy tool, not a built-in one. If you need drift detection or cost
+  estimation, look at a full platform (Scalr, Terrakube).
 - No generic multi-provider backend abstraction. R2 and AWS S3 are the two
   tuned targets; other S3-compatible providers work through the `endpoint`
   escape hatch on a best-effort basis, see "Other S3-compatible providers"
