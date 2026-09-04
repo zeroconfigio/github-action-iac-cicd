@@ -227,6 +227,75 @@ assert_command_fails \
   "Apply step's show -json is not invoked and the step fails when its internal plan exits 1" \
   build_apply_plan_show_command "tofu" "/tmp/runner-temp" "1"
 
+# Mirrors action.yml's "Policy check (plan)" step's if: condition.
+policy_check_should_run() {
+  local command="$1"
+  local policy_command="$2"
+
+  [ "$command" = "plan" ] && [ -n "$policy_command" ]
+}
+
+# Mirrors action.yml's "Policy check (plan)" step's run: block, given a
+# plan-json path and a stand-in policy command.
+run_policy_check() {
+  local plan_json="$1"
+  local policy_command="$2"
+
+  IAC_PLAN_JSON="$plan_json" bash -c '
+    set -euo pipefail
+    if ! '"$policy_command"'; then
+      echo "::error::policy check failed"
+      exit 1
+    fi
+  '
+}
+
+# Scenario 1: Given policy-command empty, when plan completes, then the
+# policy-check step is skipped entirely (no error, no-op).
+if policy_check_should_run "plan" ""; then
+  echo "FAIL: policy-check step's if: condition runs with an empty policy-command (expected skip)"
+  failures=$((failures + 1))
+else
+  echo "PASS: policy-check step's if: condition skips with an empty policy-command"
+fi
+
+# Scenario 2: Given policy-command: 'true', when the step runs, then it
+# exits 0 and continues.
+if run_policy_check "/tmp/runner-temp/iac-cicd-tfplan.json" "true" > /dev/null 2>&1; then
+  echo "PASS: policy-check step exits 0 and continues when policy-command is 'true'"
+else
+  echo "FAIL: policy-check step did not exit 0 when policy-command is 'true'"
+  failures=$((failures + 1))
+fi
+
+# Scenario 3: Given policy-command: 'false', when the step runs, then it
+# exits nonzero and fails with an error.
+if run_policy_check "/tmp/runner-temp/iac-cicd-tfplan.json" "false" > /dev/null 2>&1; then
+  echo "FAIL: policy-check step did not fail when policy-command is 'false'"
+  failures=$((failures + 1))
+else
+  echo "PASS: policy-check step exits nonzero and fails when policy-command is 'false'"
+fi
+
+# Scenario 4: Given policy-command set and command == 'apply', when this
+# step's if: is evaluated, then it does not run.
+if policy_check_should_run "apply" "true"; then
+  echo "FAIL: policy-check step's if: condition runs on command == 'apply' (expected skip)"
+  failures=$((failures + 1))
+else
+  echo "PASS: policy-check step's if: condition skips on command == 'apply'"
+fi
+
+# Scenario 5: Given a policy-command that reads $IAC_PLAN_JSON, when the step
+# runs, then it exits 0, proving the var is exported at plan-time.
+expected_path="/tmp/runner-temp/iac-cicd-tfplan.json"
+if run_policy_check "$expected_path" '[ "$IAC_PLAN_JSON" = "'"$expected_path"'" ]' > /dev/null 2>&1; then
+  echo "PASS: IAC_PLAN_JSON is exported to the policy-command's environment at plan-time"
+else
+  echo "FAIL: IAC_PLAN_JSON was not visible to the policy-command's environment"
+  failures=$((failures + 1))
+fi
+
 if [ "$failures" -gt 0 ]; then
   echo "$failures scenario(s) failed"
   exit 1

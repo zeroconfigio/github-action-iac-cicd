@@ -60,6 +60,10 @@ inputs:
     description: 'Post/update a sticky PR comment with the plan output.'
     required: false
     default: 'true'
+  policy-command:
+    description: 'Command run against the JSON plan before allowing merge/apply. Receives the plan JSON path via the IAC_PLAN_JSON env var. Nonzero exit fails the check. Empty (default) disables the policy gate.'
+    required: false
+    default: ''
   github-token:
     description: 'Token used to post the PR comment. Defaults to the workflow job token.'
     required: false
@@ -245,6 +249,18 @@ runs:
 
         "${{ steps.resolve.outputs.bin }}" show -json "$RUNNER_TEMP/iac-cicd-tfplan.bin" \
           > "$RUNNER_TEMP/iac-cicd-tfplan.json"
+
+    - name: Policy check (plan)
+      if: steps.resolve.outputs.command == 'plan' && inputs.policy-command != ''
+      shell: bash
+      env:
+        IAC_PLAN_JSON: ${{ runner.temp }}/iac-cicd-tfplan.json
+      run: |
+        set -euo pipefail
+        if ! ${{ inputs.policy-command }}; then
+          echo "::error::policy check failed"
+          exit 1
+        fi
 
     - name: Comment plan on PR
       if: |
