@@ -223,9 +223,11 @@ runs:
         AWS_ACCESS_KEY_ID: ${{ inputs.access-key-id }}
         AWS_SECRET_ACCESS_KEY: ${{ inputs.secret-access-key }}
       run: |
+        # keep in sync with the Apply step's plan+show sequence below
         set -euo pipefail
         set +e
         "${{ steps.resolve.outputs.bin }}" plan -input=false -no-color -detailed-exitcode \
+          -out="$RUNNER_TEMP/iac-cicd-tfplan.bin" \
           ${{ inputs.extra-args }} | tee "$RUNNER_TEMP/iac-cicd-plan.txt"
         code="${PIPESTATUS[0]}"
         set -e
@@ -240,6 +242,9 @@ runs:
         else
           echo "has-changes=false" >> "$GITHUB_OUTPUT"
         fi
+
+        "${{ steps.resolve.outputs.bin }}" show -json "$RUNNER_TEMP/iac-cicd-tfplan.bin" \
+          > "$RUNNER_TEMP/iac-cicd-tfplan.json"
 
     - name: Comment plan on PR
       if: |
@@ -292,8 +297,23 @@ runs:
         AWS_ACCESS_KEY_ID: ${{ inputs.access-key-id }}
         AWS_SECRET_ACCESS_KEY: ${{ inputs.secret-access-key }}
       run: |
+        # keep in sync with the Plan step's plan+show sequence above
         set -euo pipefail
-        "${{ steps.resolve.outputs.bin }}" apply -input=false -auto-approve ${{ inputs.extra-args }}
+        set +e
+        "${{ steps.resolve.outputs.bin }}" plan -out="$RUNNER_TEMP/iac-cicd-tfplan.bin" -input=false -no-color \
+          ${{ inputs.extra-args }}
+        code="$?"
+        set -e
+
+        if [ "$code" != "0" ]; then
+          echo "::error::plan failed, see log above"
+          exit 1
+        fi
+
+        "${{ steps.resolve.outputs.bin }}" show -json "$RUNNER_TEMP/iac-cicd-tfplan.bin" \
+          > "$RUNNER_TEMP/iac-cicd-tfplan.json"
+
+        "${{ steps.resolve.outputs.bin }}" apply -input=false -auto-approve "$RUNNER_TEMP/iac-cicd-tfplan.bin"
         echo "exitcode=0" >> "$GITHUB_OUTPUT"
         echo "has-changes=true" >> "$GITHUB_OUTPUT"
 
