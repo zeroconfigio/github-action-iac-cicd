@@ -241,12 +241,25 @@ runs:
           echo "encrypt                     = ${{ steps.validate.outputs.encrypt }}"
         } > "$RUNNER_TEMP/iac-cicd-backend.hcl"
 
+    - name: Configure credentials (OIDC)
+      if: steps.validate.outputs.auth-mode == 'oidc'
+      uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+      with:
+        role-to-assume: ${{ inputs.aws-role-arn }}
+        role-session-name: ${{ inputs.aws-role-session-name }}
+        aws-region: ${{ steps.validate.outputs.region }}
+
+    - name: Configure credentials (static)
+      if: steps.validate.outputs.auth-mode == 'static'
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "AWS_ACCESS_KEY_ID=${{ inputs.access-key-id }}" >> "$GITHUB_ENV"
+        echo "AWS_SECRET_ACCESS_KEY=${{ inputs.secret-access-key }}" >> "$GITHUB_ENV"
+
     - name: Init
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      env:
-        AWS_ACCESS_KEY_ID: ${{ inputs.access-key-id }}
-        AWS_SECRET_ACCESS_KEY: ${{ inputs.secret-access-key }}
       run: |
         set -euo pipefail
         "${{ steps.resolve.outputs.bin }}" init -input=false \
@@ -257,9 +270,6 @@ runs:
       id: plan
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      env:
-        AWS_ACCESS_KEY_ID: ${{ inputs.access-key-id }}
-        AWS_SECRET_ACCESS_KEY: ${{ inputs.secret-access-key }}
       run: |
         # keep in sync with the Apply step's plan+show sequence below
         set -euo pipefail
@@ -343,9 +353,6 @@ runs:
       id: apply
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      env:
-        AWS_ACCESS_KEY_ID: ${{ inputs.access-key-id }}
-        AWS_SECRET_ACCESS_KEY: ${{ inputs.secret-access-key }}
       run: |
         # keep in sync with the Plan step's plan+show sequence above
         set -euo pipefail
