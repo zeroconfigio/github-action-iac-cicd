@@ -296,6 +296,84 @@ else
   failures=$((failures + 1))
 fi
 
+# Mirrors action.yml's "Apply" step's inline policy-check block, guarded by
+# policy-command being non-empty.
+apply_policy_check_should_run() {
+  local policy_command="$1"
+
+  [ -n "$policy_command" ]
+}
+
+# Echoes a sentinel standing in for the real apply invocation that follows
+# the check in action.yml.
+run_apply_policy_check() {
+  local plan_json="$1"
+  local policy_command="$2"
+
+  bash -c '
+    set -euo pipefail
+    export IAC_PLAN_JSON="'"$plan_json"'"
+    if ! '"$policy_command"'; then
+      echo "::error::policy check failed"
+      exit 1
+    fi
+    echo "APPLY_REACHED"
+  '
+}
+
+# Scenario 1: policy command receives the apply-time plan JSON path via
+# IAC_PLAN_JSON.
+expected_apply_plan_path="/tmp/runner-temp/iac-cicd-tfplan.json"
+if run_apply_policy_check "$expected_apply_plan_path" '[ "$IAC_PLAN_JSON" = "'"$expected_apply_plan_path"'" ]' > /dev/null 2>&1; then
+  echo "PASS: IAC_PLAN_JSON is exported to the apply-time policy-command's environment"
+else
+  echo "FAIL: IAC_PLAN_JSON was not visible to the apply-time policy-command's environment"
+  failures=$((failures + 1))
+fi
+
+# Scenario 2: a failing check must prevent the sentinel apply logic from
+# running.
+apply_policy_output="$(run_apply_policy_check "$expected_apply_plan_path" "false" 2>&1 || true)"
+if [[ "$apply_policy_output" == *"APPLY_REACHED"* ]]; then
+  echo "FAIL: apply logic ran after a failing apply-time policy check"
+  failures=$((failures + 1))
+else
+  echo "PASS: apply logic does not run after a failing apply-time policy check"
+fi
+assert_command_fails \
+  "apply-time policy-check block exits nonzero when policy-command is 'false'" \
+  run_apply_policy_check "$expected_apply_plan_path" "false"
+
+# Scenario 3: an empty policy-command skips the block entirely.
+if apply_policy_check_should_run ""; then
+  echo "FAIL: apply-time policy-check block runs with an empty policy-command (expected skip)"
+  failures=$((failures + 1))
+else
+  echo "PASS: apply-time policy-check block skips with an empty policy-command"
+fi
+
+# Scenario 4: in the real action.yml, the apply-time policy-check logic must
+# precede the final apply invocation, and neither may use continue-on-error.
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+action_yml="$script_dir/../action.yml"
+
+policy_check_line=$(grep -n "policy check failed" "$action_yml" | tail -n1 | cut -d: -f1)
+apply_invoke_line=$(grep -n 'apply -input=false -auto-approve' "$action_yml" | tail -n1 | cut -d: -f1)
+
+if [ -n "$policy_check_line" ] && [ -n "$apply_invoke_line" ] && [ "$policy_check_line" -lt "$apply_invoke_line" ]; then
+  echo "PASS: apply-time policy-check logic appears before the final apply invocation in action.yml"
+else
+  echo "FAIL: apply-time policy-check logic does not precede the final apply invocation in action.yml"
+  failures=$((failures + 1))
+fi
+
+if grep -n "continue-on-error: *true" "$action_yml" > /dev/null 2>&1; then
+  echo "FAIL: action.yml contains a continue-on-error: true step"
+  failures=$((failures + 1))
+else
+  echo "PASS: action.yml contains no continue-on-error: true step"
+fi
+
 if [ "$failures" -gt 0 ]; then
   echo "$failures scenario(s) failed"
   exit 1

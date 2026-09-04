@@ -329,6 +329,14 @@ runs:
         "${{ steps.resolve.outputs.bin }}" show -json "$RUNNER_TEMP/iac-cicd-tfplan.bin" \
           > "$RUNNER_TEMP/iac-cicd-tfplan.json"
 
+        if [ -n "${{ inputs.policy-command }}" ]; then
+          export IAC_PLAN_JSON="$RUNNER_TEMP/iac-cicd-tfplan.json"
+          if ! ${{ inputs.policy-command }}; then
+            echo "::error::policy check failed"
+            exit 1
+          fi
+        fi
+
         "${{ steps.resolve.outputs.bin }}" apply -input=false -auto-approve "$RUNNER_TEMP/iac-cicd-tfplan.bin"
         echo "exitcode=0" >> "$GITHUB_OUTPUT"
         echo "has-changes=true" >> "$GITHUB_OUTPUT"
