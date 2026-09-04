@@ -20,7 +20,7 @@ inputs:
     required: false
     default: '.'
   command:
-    description: "Override auto-detection ('plan' or 'apply'). Default: plan on pull_request events, apply otherwise."
+    description: "Override auto-detection ('plan' or 'apply'). Default: apply on push events, plan otherwise."
     required: false
     default: ''
   backend:
@@ -152,10 +152,10 @@ runs:
 
         cmd="${{ inputs.command }}"
         if [ -z "$cmd" ]; then
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            cmd="plan"
-          else
+          if [ "${{ github.event_name }}" = "push" ]; then
             cmd="apply"
+          else
+            cmd="plan"
           fi
         fi
         if [ "$cmd" != "plan" ] && [ "$cmd" != "apply" ]; then

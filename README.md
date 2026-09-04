@@ -112,6 +112,14 @@ property of that job, not something the action can enforce internally. Put
 the apply job behind a [GitHub Environment](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment)
 with a required reviewer, see `examples/plan-apply.yml` for the full pattern.
 
+`command` auto-detect treats `plan` as the safe default for any event that
+isn't `push`, not just `pull_request`. The shipped `examples/plan-apply.yml`
+is unaffected by this: its `plan` job already gates on
+`github.event_name == 'pull_request'` and its `apply` job gates on
+`github.event_name == 'push'`, so neither job ever hits the action with any
+other event type. This only matters for consumers that call the action
+directly from other event types (a scheduled drift check, for example).
+
 ## Inputs
 
 | Input | Required | Default | Description |
@@ -119,7 +127,7 @@ with a required reviewer, see `examples/plan-apply.yml` for the full pattern.
 | `tool` | no | `opentofu` | `opentofu` or `terraform` |
 | `tool-version` | no | `latest` | Version to install |
 | `working-directory` | no | `.` | Root module directory |
-| `command` | no | auto | Override auto-detect (`plan` on `pull_request`, `apply` otherwise) |
+| `command` | no | auto | Override auto-detect (`apply` on `push`, `plan` otherwise) |
 | `backend` | no | `r2` | `r2` (Cloudflare R2) or `s3` (AWS S3) |
 | `bucket` | yes | | Bucket for state |
 | `access-key-id` | yes | | S3-compatible access key ID |
