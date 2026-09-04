@@ -4,3 +4,6 @@
 *.tfstate.*
 *.tfplan
 .DS_Store
+.claude/plans/
+.claude/implement/
+.claude/worktrees/

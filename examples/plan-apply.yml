@@ -7,6 +7,10 @@
 #
 # Required repo secrets: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET.
 # Required repo setup: Settings -> Environments -> "production" -> add required reviewers.
+#
+# This example uses the default backend (Cloudflare R2). For AWS S3, add
+# `backend: s3` and `region: <region>` to both `with:` blocks and swap the
+# R2 secrets for AWS ones, see the README's Quickstart for the full diff.
 
 name: iac
 
@@ -39,10 +43,10 @@ jobs:
 
       - uses: zeroconfigio/github-action-iac-cicd@v1
         with:
-          r2-account-id: ${{ secrets.R2_ACCOUNT_ID }}
-          r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
-          r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          r2-bucket: ${{ secrets.R2_BUCKET }}
+          account-id: ${{ secrets.R2_ACCOUNT_ID }}
+          access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          bucket: ${{ secrets.R2_BUCKET }}
 
   apply:
     if: github.event_name == 'push'
@@ -55,7 +59,7 @@ jobs:
 
       - uses: zeroconfigio/github-action-iac-cicd@v1
         with:
-          r2-account-id: ${{ secrets.R2_ACCOUNT_ID }}
-          r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
-          r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          r2-bucket: ${{ secrets.R2_BUCKET }}
+          account-id: ${{ secrets.R2_ACCOUNT_ID }}
+          access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          bucket: ${{ secrets.R2_BUCKET }}
