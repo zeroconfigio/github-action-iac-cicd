@@ -26,3 +26,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   as inputs, not a replacement, setting both fails loud by design. `s3` only,
   R2 has no OIDC equivalent. See the README's "OIDC for AWS S3" section for
   the trust policy and the required `permissions: id-token: write`.
+- Example scheduled drift-detection workflow
+  (`examples/drift-detection.yml`): calls the action with no `command:`
+  override, relying on the existing safer default (`plan` for any non-`push`
+  event) instead of a special drift mode. Opens or updates a single Issue
+  carrying a `drift-detection` label when `has-changes == 'true'`, instead
+  of filing a new Issue every run. See the README's "Drift detection"
+  section.

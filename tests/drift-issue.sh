@@ -55,7 +55,7 @@ if [ -z "$marker" ]; then
   exit 1
 fi
 
-# Stub gh logs every call's verb + path; returns GH_STUB_ISSUES_RESPONSE for GET.
+# Logs verb+path per line, -F/-f values on their own indented lines below it.
 stub_dir="$work_dir/bin"
 mkdir -p "$stub_dir"
 
@@ -71,6 +71,7 @@ shift
 
 verb="GET"
 path=""
+fields=()
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -79,6 +80,7 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     -F|-f)
+      fields+=("$2")
       shift 2
       ;;
     --paginate)
@@ -92,6 +94,9 @@ while [ $# -gt 0 ]; do
 done
 
 echo "$verb $path" >> "$GH_STUB_LOG"
+for field in "${fields[@]+"${fields[@]}"}"; do
+  echo "  -F $field" >> "$GH_STUB_LOG"
+done
 
 case "$verb" in
   GET)
@@ -128,6 +133,12 @@ if run_extracted_script "[]" > /dev/null 2>&1; then
     echo "FAIL: no existing labeled+marked issue did not POST as expected (log: $(cat "$log_file"))"
     failures=$((failures + 1))
   fi
+  if grep -qx "  -F labels\[\]=drift-detection" "$log_file"; then
+    echo "PASS: the created issue carries the drift-detection label"
+  else
+    echo "FAIL: the created issue is missing the drift-detection label (log: $(cat "$log_file"))"
+    failures=$((failures + 1))
+  fi
 else
   echo "FAIL: extracted script exited nonzero for the no-existing-issue scenario"
   failures=$((failures + 1))
@@ -148,9 +159,26 @@ else
   failures=$((failures + 1))
 fi
 
-# Scenario 3: has-changes == false is the step's own if: condition, verified by grep, not execution.
-if grep -A1 "name: Open or update drift Issue" "$workflow_file" \
-  | grep -q "if: steps.iac.outputs.has-changes == 'true'"; then
+# A labeled issue with no body (GitHub allows this) must not crash the script.
+null_body_response='[{"number": 7, "body": null}]'
+
+if run_extracted_script "$null_body_response" > /dev/null 2>&1; then
+  if grep -qx "POST repos/$test_repo/issues" "$log_file" && ! grep -q "^PATCH " "$log_file"; then
+    echo "PASS: a labeled issue with a null body is treated as no match, still POSTs"
+  else
+    echo "FAIL: a null-body issue did not fall through to POST as expected (log: $(cat "$log_file"))"
+    failures=$((failures + 1))
+  fi
+else
+  echo "FAIL: extracted script crashed on a labeled issue with a null body"
+  failures=$((failures + 1))
+fi
+
+# Scenario 3: has-changes == false is the step's own if:, verified by grep, not execution.
+# Scoped to the whole step block, not just the next line, so a comment doesn't break the match.
+step_block=$(awk '/name: Open or update drift Issue/{p=1} p{print} p && /run: \|/{exit}' "$workflow_file")
+
+if echo "$step_block" | grep -q "if: steps.iac.outputs.has-changes == 'true'"; then
   echo "PASS: the drift-issue step is gated by if: steps.iac.outputs.has-changes == 'true'"
 else
   echo "FAIL: the drift-issue step is not gated by the expected has-changes if: condition"
