@@ -494,6 +494,23 @@ assert_auth_mode_fails \
   "s3 backend with aws-role-arn and secret-access-key set (access-key-id unset) fails validation" \
   "s3" "" "secretexample" "arn:aws:iam::123456789012:role/deploy"
 
+# A stale env: block here would silently override OIDC-exported credentials with empty strings.
+if grep -n 'AWS_ACCESS_KEY_ID: \${{ inputs.access-key-id }}' "$action_yml" > /dev/null 2>&1 \
+  || grep -n 'AWS_SECRET_ACCESS_KEY: \${{ inputs.secret-access-key }}' "$action_yml" > /dev/null 2>&1; then
+  echo "FAIL: action.yml still has a per-step AWS credential env: block, it should only export via the shared credential step"
+  failures=$((failures + 1))
+else
+  echo "PASS: no per-step AWS credential env: blocks remain on Init/Plan/Apply"
+fi
+
+if grep -n "auth-mode == 'oidc'" "$action_yml" > /dev/null 2>&1 \
+  && grep -A1 "auth-mode == 'oidc'" "$action_yml" | grep -q "aws-actions/configure-aws-credentials"; then
+  echo "PASS: the OIDC auth-mode step selects aws-actions/configure-aws-credentials"
+else
+  echo "FAIL: no step selects aws-actions/configure-aws-credentials under the OIDC auth-mode condition"
+  failures=$((failures + 1))
+fi
+
 if [ "$failures" -gt 0 ]; then
   echo "$failures scenario(s) failed"
   exit 1
