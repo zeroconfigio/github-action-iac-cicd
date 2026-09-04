@@ -24,7 +24,6 @@ jobs:
       contents: write
       id-token: write
       attestations: write
-      artifact-metadata: write
     steps:
       # No `with:` overrides needed: actions/checkout fetches the exact
       # ref/SHA that triggered the workflow by default (a single commit,
