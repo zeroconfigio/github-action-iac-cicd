@@ -33,3 +33,26 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   carrying a `drift-detection` label when `has-changes == 'true'`, instead
   of filing a new Issue every run. See the README's "Drift detection"
   section.
+- `.github/dependabot.yml`: weekly `github-actions` update checks,
+  covering every pinned SHA in `action.yml` and the workflow files.
+- `SECURITY.md`: documents the SHA-pinning verification practice and
+  points to GitHub's private vulnerability reporting as the disclosure
+  channel.
+- `.github/workflows/release.yml`: on a `v*` tag push, archives the
+  tagged tree and attests it with `actions/attest-build-provenance`,
+  then creates a GitHub Release from that archive. See the README's
+  "Supply chain" section for exactly what the attestation does and does
+  not prove.
+- README "Supply chain" section: Dependabot cadence, the `SECURITY.md`
+  link, the release attestation's scope and limits, and a manual
+  follow-up note to enable tag protection on `v*` once `v1` is tagged.
+
+### Notes
+
+- `v1` hasn't been tagged yet. Before it is, a few things still need a
+  real, live run rather than a static check: a plan/apply against a real
+  R2 bucket and a real S3 bucket, a `policy-command` failure proven to
+  block a real `apply` (not just a step that reports failure), and a
+  real tag push exercised through `release.yml` end to end. Once `v1`
+  exists, tag protection on `v*` also needs to be enabled by hand in the
+  repo's Settings, see the README's "Supply chain" section.

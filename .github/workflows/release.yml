@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: MIT
+#
+# On a version tag push, archives the tagged tree and attests it via
+# actions/attest-build-provenance, then creates a GitHub Release with the
+# archive attached. This repo has no compiled artifact or container image,
+# so the attestation covers "this tarball of the tagged tree came from this
+# workflow run in this repo", not a full build-provenance chain the way it
+# would for a compiled binary. A real but thinner guarantee, stated plainly
+# rather than oversold.
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions: {}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      # Documented by actions/attest's own setup instructions for the exact
+      # pinned call below; unused while push-to-registry stays unset here.
+      artifact-metadata: write
+    steps:
+      # No `with:` overrides needed: actions/checkout fetches the exact
+      # ref/SHA that triggered the workflow by default (a single commit,
+      # fetch-depth: 1). On a `push: tags:` trigger that ref is
+      # refs/tags/<tag>, and checkout's refspec logic fetches that tag ref
+      # locally by name in this case, so it is already resolvable for the
+      # `git archive` step below without fetch-depth: 0 or fetch-tags: true.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Archive tagged tree
+        run: git archive --format=tar.gz -o "$RUNNER_TEMP/release.tar.gz" "$GITHUB_REF_NAME"
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/release.tar.gz
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP/release.tar.gz" --generate-notes

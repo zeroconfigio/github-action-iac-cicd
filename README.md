@@ -241,6 +241,30 @@ only issues carrying that label for its marker before deciding whether to
 `PATCH` an existing Issue or `POST` a new one, so the search stays bounded
 instead of scanning every open issue in the repo.
 
+## Supply chain
+
+`.github/dependabot.yml` watches every pinned `github-actions` SHA, in
+`action.yml` and in the workflow files, on a weekly schedule, and opens a
+PR when a pin goes stale.
+
+See [`SECURITY.md`](SECURITY.md) for how to verify a pin yourself and
+where to report a vulnerability, this README doesn't repeat that here.
+
+On a `v*` tag push, `.github/workflows/release.yml` archives the tagged
+tree and attests it with `actions/attest-build-provenance`. The
+attestation proves one specific thing: a tarball of the tagged tree was
+produced by that workflow, in this repo, for that tag. It's not a full
+build-provenance chain for a compiled artifact, this project doesn't
+produce one, there's no compiled binary or container image for a chain
+like that to cover. A real guarantee, a narrower one than the phrase
+"build provenance" might suggest by itself.
+
+**Manual follow-up, not something any workflow configures:** once `v1`
+is tagged, enable tag protection on `v*` in the repo's Settings
+(Rulesets, or branch/tag protection). Without it, the tag could be
+silently repointed at different code later, and nothing in this repo's
+workflows would catch that.
+
 ## Inputs
 
 | Input | Required | Default | Description |
