@@ -59,7 +59,7 @@ jobs:
           repo="${{ github.repository }}"
 
           existing=$(gh api "repos/$repo/issues?labels=drift-detection&state=open" --paginate \
-            | jq -r --arg marker "$marker" '.[] | select(.body | startswith($marker)) | .number' \
+            | jq -r --arg marker "$marker" '.[] | select((.body // "") | startswith($marker)) | .number' \
             | head -n1)
 
           body_file="$RUNNER_TEMP/drift-issue-body.md"

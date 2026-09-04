@@ -148,6 +148,21 @@ else
   failures=$((failures + 1))
 fi
 
+# A labeled issue with no body (GitHub allows this) must not crash the script.
+null_body_response='[{"number": 7, "body": null}]'
+
+if run_extracted_script "$null_body_response" > /dev/null 2>&1; then
+  if grep -qx "POST repos/$test_repo/issues" "$log_file" && ! grep -q "^PATCH " "$log_file"; then
+    echo "PASS: a labeled issue with a null body is treated as no match, still POSTs"
+  else
+    echo "FAIL: a null-body issue did not fall through to POST as expected (log: $(cat "$log_file"))"
+    failures=$((failures + 1))
+  fi
+else
+  echo "FAIL: extracted script crashed on a labeled issue with a null body"
+  failures=$((failures + 1))
+fi
+
 # Scenario 3: has-changes == false is the step's own if: condition, verified by grep, not execution.
 if grep -A1 "name: Open or update drift Issue" "$workflow_file" \
   | grep -q "if: steps.iac.outputs.has-changes == 'true'"; then

@@ -118,7 +118,8 @@ is unaffected by this: its `plan` job already gates on
 `github.event_name == 'pull_request'` and its `apply` job gates on
 `github.event_name == 'push'`, so neither job ever hits the action with any
 other event type. This only matters for consumers that call the action
-directly from other event types (a scheduled drift check, for example).
+directly from other event types (a scheduled drift check, for example, see
+[Drift detection](#drift-detection)).
 
 ## Policy gate
 
@@ -221,6 +222,25 @@ steps:
 No `access-key-id`/`secret-access-key` needed, the role is assumed
 directly.
 
+## Drift detection
+
+`iac-cicd` has no dedicated "drift" mode, drift detection is just the same
+plan/apply primitives run on a schedule. See
+[`examples/drift-detection.yml`](examples/drift-detection.yml) for a
+complete `on: schedule` (plus `workflow_dispatch` for manual runs) workflow
+that calls the action with no `command:` override. Because the triggering
+event isn't `push`, the auto-detect default resolves to `plan` (see
+[Manual approval before apply](#manual-approval-before-apply)), so a
+scheduled run never applies anything on its own, it only reports what's
+changed outside the pipeline.
+
+When the action's `has-changes` output is `'true'`, the example's follow-up
+step opens or updates a single GitHub Issue instead of filing a new one on
+every run. It tags the Issue with a `drift-detection` label and searches
+only issues carrying that label for its marker before deciding whether to
+`PATCH` an existing Issue or `POST` a new one, so the search stays bounded
+instead of scanning every open issue in the repo.
+
 ## Inputs
 
 | Input | Required | Default | Description |
@@ -275,10 +295,11 @@ does not touch that block.
 
 ## What this deliberately doesn't do
 
-- No bundled policy engine, no drift detection, no cost estimation.
-  `policy-command` (see [Policy gate](#policy-gate)) is a hook to your own
-  policy tool, not a built-in one. If you need drift detection or cost
-  estimation, look at a full platform (Scalr, Terrakube).
+- No bundled policy engine, no cost estimation. `policy-command` (see
+  [Policy gate](#policy-gate)) is a hook to your own policy tool, not a
+  built-in one. Drift detection isn't a special mode either, it's the same
+  plan primitives on a schedule, see [Drift detection](#drift-detection).
+  If you need cost estimation, look at a full platform (Scalr, Terrakube).
 - No generic multi-provider backend abstraction. R2 and AWS S3 are the two
   tuned targets; other S3-compatible providers work through the `endpoint`
   escape hatch on a best-effort basis, see "Other S3-compatible providers"
