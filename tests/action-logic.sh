@@ -497,6 +497,22 @@ else
   echo "PASS: action.yml contains no continue-on-error: true step"
 fi
 
+# A regression to $RUNNER_TEMP here would silently break IAC_PLAN_JSON: env: blocks need expression syntax.
+if grep -q 'IAC_PLAN_JSON: \${{ runner.temp }}' "$action_yml"; then
+  echo "PASS: the plan-time policy env: block uses expression syntax for IAC_PLAN_JSON"
+else
+  echo "FAIL: the plan-time policy env: block does not use \${{ runner.temp }} for IAC_PLAN_JSON"
+  failures=$((failures + 1))
+fi
+
+policy_unset_count=$(grep -c 'unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY' "$action_yml")
+if [ "$policy_unset_count" -eq 2 ]; then
+  echo "PASS: both policy-command invocations isolate AWS credentials from their subshell"
+else
+  echo "FAIL: expected 2 policy-command credential-isolation subshells, found $policy_unset_count"
+  failures=$((failures + 1))
+fi
+
 if [ "$failures" -gt 0 ]; then
   echo "$failures scenario(s) failed"
   exit 1

@@ -253,11 +253,12 @@ runs:
     - name: Policy check (plan)
       if: steps.resolve.outputs.command == 'plan' && inputs.policy-command != ''
       shell: bash
+      working-directory: ${{ inputs.working-directory }}
       env:
         IAC_PLAN_JSON: ${{ runner.temp }}/iac-cicd-tfplan.json
       run: |
         set -euo pipefail
-        if ! ${{ inputs.policy-command }}; then
+        if ! (unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; ${{ inputs.policy-command }}); then
           echo "::error::policy check failed"
           exit 1
         fi
@@ -331,7 +332,7 @@ runs:
 
         if [ -n "${{ inputs.policy-command }}" ]; then
           export IAC_PLAN_JSON="$RUNNER_TEMP/iac-cicd-tfplan.json"
-          if ! ${{ inputs.policy-command }}; then
+          if ! (unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; ${{ inputs.policy-command }}); then
             echo "::error::policy check failed"
             exit 1
           fi
