@@ -150,6 +150,77 @@ policy-command: "conftest test --policy ./policy $IAC_PLAN_JSON"
 require it, or any other policy tool. Your own workflow needs to install
 whatever `policy-command` points at before this action's step runs.
 
+## OIDC for AWS S3
+
+For `backend: s3`, you can skip long-lived AWS keys and assume an IAM role
+through GitHub's OIDC token instead. Set `aws-role-arn` (and optionally
+`aws-role-session-name`) and `iac-cicd` assumes that role via
+`aws-actions/configure-aws-credentials` before running `init`. This only
+applies to `backend: s3`, R2 has no OIDC equivalent, it authenticates
+through its own API token.
+
+`aws-role-arn` is additive to `access-key-id`/`secret-access-key` as
+inputs, not a replacement for them: its presence is what selects OIDC auth
+over static keys. If you set both `aws-role-arn` and the static keys, the
+action fails loud with a validation error instead of silently picking one.
+That's by design.
+
+The calling job needs `permissions: id-token: write`. `iac-cicd` can't
+grant that permission on your behalf, GitHub permissions are set at the
+workflow or job level only, an action included in a job has no way to add
+scopes to it. If that permission is missing,
+`aws-actions/configure-aws-credentials` fails at runtime with AWS's own
+`AssumeRoleWithWebIdentity` error, not a message from this action.
+
+You also need the GitHub OIDC provider already registered in your AWS
+account. That's a one-time AWS account setup step this action doesn't
+perform for you, see
+[GitHub's docs on configuring OpenID Connect in AWS](https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services)
+for how to set it up.
+
+A trust policy scoped to the consumer repo looks like this:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+        },
+        "StringLike": {
+          "token.actions.githubusercontent.com:sub": "repo:<owner>/<repo>:*"
+        }
+      }
+    }
+  ]
+}
+```
+
+Minimal `with:` block for OIDC:
+
+```yaml
+permissions:
+  id-token: write
+
+steps:
+  - uses: zeroconfigio/github-action-iac-cicd@v1
+    with:
+      backend: s3
+      region: us-east-1
+      aws-role-arn: arn:aws:iam::123456789012:role/iac-cicd-deploy
+      bucket: ${{ secrets.AWS_BUCKET }}
+```
+
+No `access-key-id`/`secret-access-key` needed, the role is assumed
+directly.
+
 ## Inputs
 
 | Input | Required | Default | Description |
@@ -160,8 +231,10 @@ whatever `policy-command` points at before this action's step runs.
 | `command` | no | auto | Override auto-detect (`apply` on `push`, `plan` otherwise) |
 | `backend` | no | `r2` | `r2` (Cloudflare R2) or `s3` (AWS S3) |
 | `bucket` | yes | | Bucket for state |
-| `access-key-id` | yes | | S3-compatible access key ID |
-| `secret-access-key` | yes | | S3-compatible secret access key |
+| `access-key-id` | required unless `aws-role-arn` is set (`s3`), or always (`r2`) | | S3-compatible access key ID |
+| `secret-access-key` | required unless `aws-role-arn` is set (`s3`), or always (`r2`) | | S3-compatible secret access key |
+| `aws-role-arn` | no | | IAM role ARN to assume via OIDC, `s3` only, see [OIDC for AWS S3](#oidc-for-aws-s3) |
+| `aws-role-session-name` | no | `iac-cicd` | Session name used when assuming `aws-role-arn` |
 | `account-id` | required for `r2` | | Cloudflare account ID (ignored for `s3`, or when `endpoint` is set) |
 | `region` | required for `s3` | `auto` for `r2` | Bucket region |
 | `endpoint` | no | derived | Override the S3-compatible endpoint URL |
