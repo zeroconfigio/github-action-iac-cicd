@@ -1,0 +1,77 @@
+# Example scheduled drift-detection workflow for zeroconfigio/github-action-iac-cicd.
+#
+# Runs a daily plan against the state backend and, if it finds changes nobody
+# applied through this pipeline (drift), opens or updates a single sticky,
+# labeled Issue rather than filing a new one every day. Never applies
+# anything: it does not pass `command:` to the action, so the action falls
+# back to its own default, `plan` for any event that isn't `push` (see the
+# README's "Manual approval before apply" section), the safer choice for an
+# unattended schedule.
+#
+# Required repo secrets: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET.
+# Same four backend secrets as plan-apply.yml, this workflow needs read
+# access to the state backend to run its plan.
+#
+# This example uses the default backend (Cloudflare R2). For AWS S3 (static
+# keys or OIDC), see plan-apply.yml's header comment and commented-out
+# alternate blocks for the full diff.
+
+name: drift-detection
+
+on:
+  schedule:
+    # 06:00 UTC daily.
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: drift-detection-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - id: iac
+        uses: zeroconfigio/github-action-iac-cicd@v1
+        with:
+          account-id: ${{ secrets.R2_ACCOUNT_ID }}
+          access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          bucket: ${{ secrets.R2_BUCKET }}
+
+      - name: Open or update drift Issue
+        if: steps.iac.outputs.has-changes == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          marker="<!-- iac-cicd-drift -->"
+          repo="${{ github.repository }}"
+
+          existing=$(gh api "repos/$repo/issues?labels=drift-detection&state=open" --paginate \
+            | jq -r --arg marker "$marker" '.[] | select((.body // "") | startswith($marker)) | .number' \
+            | head -n1)
+
+          body_file="$RUNNER_TEMP/drift-issue-body.md"
+          {
+            echo "$marker"
+            echo "Drift detected: the last scheduled plan found changes outside this pipeline."
+            echo ""
+            echo "See the run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } > "$body_file"
+
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/$repo/issues/$existing" -F body=@"$body_file"
+          else
+            gh api -X POST "repos/$repo/issues" -F title="Drift detected" -F body=@"$body_file" -F "labels[]=drift-detection"
+          fi

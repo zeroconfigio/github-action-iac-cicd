@@ -126,3 +126,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - run: bash tests/action-logic.sh
+
+      # tests/drift-issue.sh extracts and runs the real run: block from
+      # examples/drift-detection.yml via PyYAML, same technique self-lint
+      # uses for action.yml.
+      - name: Install PyYAML
+        run: python3 -m pip install --quiet pyyaml
+
+      - run: bash tests/drift-issue.sh
