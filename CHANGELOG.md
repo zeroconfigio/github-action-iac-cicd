@@ -20,3 +20,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Sentinel, a custom script), checked against the JSON plan at both plan-time
   and apply-time. Nonzero exit fails the run. See the README's "Policy gate"
   section for the `IAC_PLAN_JSON` contract and why it checks twice.
+- `aws-role-arn` and `aws-role-session-name` inputs: OIDC auth for
+  `backend: s3`, assuming an IAM role via `aws-actions/configure-aws-credentials`
+  instead of static access keys. Additive to `access-key-id`/`secret-access-key`
+  as inputs, not a replacement, setting both fails loud by design. `s3` only,
+  R2 has no OIDC equivalent. See the README's "OIDC for AWS S3" section for
+  the trust policy and the required `permissions: id-token: write`.

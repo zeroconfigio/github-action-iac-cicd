@@ -8,9 +8,12 @@
 # Required repo secrets: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET.
 # Required repo setup: Settings -> Environments -> "production" -> add required reviewers.
 #
-# This example uses the default backend (Cloudflare R2). For AWS S3, add
-# `backend: s3` and `region: <region>` to both `with:` blocks and swap the
-# R2 secrets for AWS ones, see the README's Quickstart for the full diff.
+# This example uses the default backend (Cloudflare R2). For AWS S3 with
+# static keys, add `backend: s3` and `region: <region>` to both `with:`
+# blocks and swap the R2 secrets for AWS ones, see the README's Quickstart
+# for the full diff. For AWS S3 with OIDC (no long-lived keys at all), see
+# the commented-out alternate `with:` and `permissions:` blocks below each
+# job's active `with:` block, and the README's "OIDC for AWS S3" section.
 
 name: iac
 
@@ -48,6 +51,23 @@ jobs:
           secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           bucket: ${{ secrets.R2_BUCKET }}
 
+      # AWS S3 with OIDC, alternate to the `with:` block above. Needs
+      # `id-token: write` added to this job's `permissions:` above (not
+      # shown active here so this file keeps running against R2). No
+      # access-key-id/secret-access-key: the role is assumed directly.
+      #
+      # permissions:
+      #   contents: read
+      #   pull-requests: write
+      #   id-token: write
+      #
+      # - uses: zeroconfigio/github-action-iac-cicd@v1
+      #   with:
+      #     backend: s3
+      #     region: us-east-1
+      #     aws-role-arn: arn:aws:iam::123456789012:role/iac-cicd-deploy
+      #     bucket: ${{ secrets.AWS_BUCKET }}
+
   apply:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -63,3 +83,18 @@ jobs:
           access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
           secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           bucket: ${{ secrets.R2_BUCKET }}
+
+      # AWS S3 with OIDC, same idea as the plan job above: add
+      # `id-token: write` to this job's `permissions:` too, apply assumes
+      # the role independently of the plan run.
+      #
+      # permissions:
+      #   contents: read
+      #   id-token: write
+      #
+      # - uses: zeroconfigio/github-action-iac-cicd@v1
+      #   with:
+      #     backend: s3
+      #     region: us-east-1
+      #     aws-role-arn: arn:aws:iam::123456789012:role/iac-cicd-deploy
+      #     bucket: ${{ secrets.AWS_BUCKET }}
