@@ -136,7 +136,7 @@ directly from other event types (a scheduled drift check, for example).
 | `region` | required for `s3` | `auto` for `r2` | Bucket region |
 | `endpoint` | no | derived | Override the S3-compatible endpoint URL |
 | `state-key` | no | derived | Object key for the state file |
-| `extra-args` | no | `` | Extra flags appended to plan/apply |
+| `extra-args` | no | `` | Extra flags appended to the plan that produces the applied plan file (not to the final `apply <planfile>` call, which can't take flags like `-var-file` once a plan is saved) |
 | `comment-on-pr` | no | `true` | Post/update a sticky PR comment on plan |
 | `github-token` | no | job token | Token used to post the PR comment |
 
