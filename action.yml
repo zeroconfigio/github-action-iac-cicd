@@ -1,5 +1,5 @@
 name: 'iac-cicd'
-description: 'Zero-config OpenTofu/Terraform plan-on-PR, apply-on-merge, with state in Cloudflare R2.'
+description: 'Zero-config OpenTofu/Terraform plan-on-PR, apply-on-merge, with state in Cloudflare R2 or AWS S3.'
 author: 'ZeroConfig.io'
 
 branding:
@@ -20,21 +20,34 @@ inputs:
     required: false
     default: '.'
   command:
-    description: "Override auto-detection ('plan' or 'apply'). Default: plan on pull_request events, apply otherwise."
+    description: "Override auto-detection ('plan' or 'apply'). Default: apply on push events, plan otherwise."
     required: false
     default: ''
-  r2-account-id:
-    description: 'Cloudflare account ID that owns the R2 bucket.'
+  backend:
+    description: "State backend flavor: 'r2' (Cloudflare R2) or 's3' (AWS S3)."
+    required: false
+    default: 'r2'
+  bucket:
+    description: 'Bucket used for state storage.'
     required: true
-  r2-access-key-id:
-    description: 'R2 S3-compatible API token: access key ID.'
+  access-key-id:
+    description: 'S3-compatible API access key ID.'
     required: true
-  r2-secret-access-key:
-    description: 'R2 S3-compatible API token: secret access key.'
+  secret-access-key:
+    description: 'S3-compatible API secret access key.'
     required: true
-  r2-bucket:
-    description: 'R2 bucket used for state storage.'
-    required: true
+  account-id:
+    description: "Cloudflare account ID that owns the bucket. Required when backend is 'r2', unless endpoint is set explicitly."
+    required: false
+    default: ''
+  region:
+    description: "Bucket region. Required when backend is 's3'. Defaults to 'auto' when backend is 'r2'."
+    required: false
+    default: ''
+  endpoint:
+    description: "Override the S3-compatible endpoint URL. Auto-derived from account-id when backend is 'r2'; left unset (real AWS S3 endpoints) when backend is 's3', unless you're pointing at a third S3-compatible provider."
+    required: false
+    default: ''
   state-key:
     description: "Object key for the state file. Default: '<owner>/<repo>[/<working-directory>]/terraform.tfstate'."
     required: false
@@ -63,10 +76,12 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    - name: Validate inputs
+    - name: Validate inputs and resolve backend
+      id: validate
       shell: bash
       run: |
         set -euo pipefail
+
         case "${{ inputs.tool }}" in
           opentofu|terraform) ;;
           *)
@@ -74,6 +89,46 @@ runs:
             exit 1
             ;;
         esac
+
+        backend="${{ inputs.backend }}"
+        case "$backend" in
+          r2|s3) ;;
+          *)
+            echo "::error::backend must be 'r2' or 's3', got '$backend'"
+            exit 1
+            ;;
+        esac
+
+        endpoint="${{ inputs.endpoint }}"
+        region="${{ inputs.region }}"
+
+        if [ "$backend" = "r2" ]; then
+          if [ -z "$endpoint" ]; then
+            if [ -z "${{ inputs.account-id }}" ]; then
+              echo "::error::account-id is required when backend is 'r2', unless endpoint is set explicitly"
+              exit 1
+            fi
+            endpoint="https://${{ inputs.account-id }}.r2.cloudflarestorage.com"
+          fi
+          [ -n "$region" ] || region="auto"
+          use_path_style=true
+          skip_checks=true
+          encrypt=false
+        else
+          if [ -z "$region" ]; then
+            echo "::error::region is required when backend is 's3'"
+            exit 1
+          fi
+          use_path_style=false
+          skip_checks=false
+          encrypt=true
+        fi
+
+        echo "endpoint=$endpoint" >> "$GITHUB_OUTPUT"
+        echo "region=$region" >> "$GITHUB_OUTPUT"
+        echo "use-path-style=$use_path_style" >> "$GITHUB_OUTPUT"
+        echo "skip-checks=$skip_checks" >> "$GITHUB_OUTPUT"
+        echo "encrypt=$encrypt" >> "$GITHUB_OUTPUT"
 
     - name: Set up OpenTofu
       if: inputs.tool == 'opentofu'
@@ -97,10 +152,10 @@ runs:
 
         cmd="${{ inputs.command }}"
         if [ -z "$cmd" ]; then
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            cmd="plan"
-          else
+          if [ "${{ github.event_name }}" = "push" ]; then
             cmd="apply"
+          else
+            cmd="plan"
           fi
         fi
         if [ "$cmd" != "plan" ] && [ "$cmd" != "apply" ]; then
@@ -131,27 +186,29 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        cat > "$RUNNER_TEMP/iac-cicd-backend.hcl" <<EOF
-        bucket                      = "${{ inputs.r2-bucket }}"
-        key                         = "${{ steps.resolve.outputs.state-key }}"
-        region                      = "auto"
-        endpoints                   = { s3 = "https://${{ inputs.r2-account-id }}.r2.cloudflarestorage.com" }
-        use_lockfile                = true
-        use_path_style              = true
-        skip_credentials_validation = true
-        skip_region_validation      = true
-        skip_requesting_account_id  = true
-        skip_s3_checksum            = true
-        skip_metadata_api_check     = true
-        encrypt                     = false
-        EOF
+        {
+          echo "bucket                      = \"${{ inputs.bucket }}\""
+          echo "key                         = \"${{ steps.resolve.outputs.state-key }}\""
+          echo "region                      = \"${{ steps.validate.outputs.region }}\""
+          if [ -n "${{ steps.validate.outputs.endpoint }}" ]; then
+            echo "endpoints                   = { s3 = \"${{ steps.validate.outputs.endpoint }}\" }"
+          fi
+          echo "use_lockfile                = true"
+          echo "use_path_style              = ${{ steps.validate.outputs.use-path-style }}"
+          echo "skip_credentials_validation = ${{ steps.validate.outputs.skip-checks }}"
+          echo "skip_region_validation      = ${{ steps.validate.outputs.skip-checks }}"
+          echo "skip_requesting_account_id  = ${{ steps.validate.outputs.skip-checks }}"
+          echo "skip_s3_checksum            = ${{ steps.validate.outputs.skip-checks }}"
+          echo "skip_metadata_api_check     = ${{ steps.validate.outputs.skip-checks }}"
+          echo "encrypt                     = ${{ steps.validate.outputs.encrypt }}"
+        } > "$RUNNER_TEMP/iac-cicd-backend.hcl"
 
     - name: Init
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        AWS_ACCESS_KEY_ID: ${{ inputs.r2-access-key-id }}
-        AWS_SECRET_ACCESS_KEY: ${{ inputs.r2-secret-access-key }}
+        AWS_ACCESS_KEY_ID: ${{ inputs.access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.secret-access-key }}
       run: |
         set -euo pipefail
         "${{ steps.resolve.outputs.bin }}" init -input=false \
@@ -163,8 +220,8 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        AWS_ACCESS_KEY_ID: ${{ inputs.r2-access-key-id }}
-        AWS_SECRET_ACCESS_KEY: ${{ inputs.r2-secret-access-key }}
+        AWS_ACCESS_KEY_ID: ${{ inputs.access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.secret-access-key }}
       run: |
         set -euo pipefail
         set +e
@@ -232,8 +289,8 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        AWS_ACCESS_KEY_ID: ${{ inputs.r2-access-key-id }}
-        AWS_SECRET_ACCESS_KEY: ${{ inputs.r2-secret-access-key }}
+        AWS_ACCESS_KEY_ID: ${{ inputs.access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.secret-access-key }}
       run: |
         set -euo pipefail
         "${{ steps.resolve.outputs.bin }}" apply -input=false -auto-approve ${{ inputs.extra-args }}
